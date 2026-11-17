@@ -4,6 +4,7 @@
 // environment; Threads lists only threads of that thread's project, and any
 // other id is "not found". Environments has its own source (environments.ts).
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
+import { z } from "zod";
 import {
   matchesPathFilter,
   RUNNING,
@@ -184,6 +185,28 @@ export function pullRequestInfo(pr: PullRequestEntry): PullRequestInfo {
     inMergeQueue: pr.inMergeQueue === true,
     updatedAt: Number.isFinite(updatedAt) ? updatedAt : null,
   };
+}
+
+const PULL_REQUEST_ROWS = z.record(
+  z.string(),
+  z.discriminatedUnion("outcome", [
+    z.object({ outcome: z.literal("available"), pullRequest: z.custom<PullRequestEntry>((value) => typeof value === "object" && value !== null) }),
+    z.object({ outcome: z.literal("absent") }),
+    z.object({ outcome: z.literal("unavailable"), message: z.string() }),
+  ]),
+);
+
+export type PullRequestRow = z.infer<typeof PULL_REQUEST_ROWS>[string];
+
+/** The environment's pull request, read from the GitHub PR status plugin. */
+export async function readPullRequest(sdk: Sdk, environmentId: string): Promise<PullRequestRow> {
+  const rows = await sdk.plugins.callRpc({
+    pluginId: "bb--github-pr-status",
+    method: "pullRequests",
+    input: { keys: [environmentId] },
+    outputSchema: PULL_REQUEST_ROWS,
+  });
+  return rows[environmentId] ?? { outcome: "unavailable", message: "BB has no pull request status for this environment" };
 }
 
 /** The thread and its environment, or why there is none. */
@@ -547,7 +570,7 @@ export function createProjectSource(bb: BbPluginApi, storage: SnapshotStorage = 
         const environment = await threadEnvironment(sdk, threadId);
         if (!environment.ok) return environment;
         const [answer, env] = await Promise.all([
-          sdk.environments.pullRequest({ environmentId: environment.environmentId }),
+          readPullRequest(sdk, environment.environmentId),
           sdk.environments.get({ environmentId: environment.environmentId }),
         ]);
         if (answer.outcome === "unavailable") return failure("unavailable", answer.message);

@@ -110,7 +110,12 @@ function fakeBb(overrides: Fake = {}) {
         calls.push({ method: "diffPatch", args });
         return { outcome: "available", patches: args.paths.map((path) => ({ path, patch: `@@ ${path}`, truncated: false })) };
       },
-      pullRequest: async () => ({ outcome: "absent" }),
+    },
+    plugins: {
+      callRpc: async (args: { pluginId: string; method: string; input: { keys: string[] } }) => {
+        calls.push({ method: "plugins.callRpc", args: { pluginId: args.pluginId, method: args.method, input: args.input } });
+        return { [args.input.keys[0]]: { outcome: "absent" } };
+      },
     },
     ...overrides,
   };
@@ -208,6 +213,19 @@ describe("diff queries", () => {
       scope: { kind: "uncommitted", unborn: true },
     });
     expect(diffQuery({ kind: "branch" }, { kind: "unknown", reason: "rebase in progress" }, "main", [])).toMatchObject({ ok: false });
+  });
+});
+
+describe("PullRequest", () => {
+  it("reads the environment's pull request from the GitHub PR status plugin", async () => {
+    const { source, calls } = fakeBb();
+    const view = await source.pullRequest("thr_mine00");
+    expect(calls.find((call) => call.method === "plugins.callRpc")?.args).toEqual({
+      pluginId: "bb--github-pr-status",
+      method: "pullRequests",
+      input: { keys: ["env_a"] },
+    });
+    expect(view).toMatchObject({ ok: true, branch: "feat", pullRequest: null });
   });
 });
 
